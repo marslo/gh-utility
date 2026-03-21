@@ -1,0 +1,57 @@
+[files]
+ignore-hidden = true
+ignore-files = true
+ignore-dot = true
+ignore-vcs = true
+ignore-global = true
+ignore-parent = true
+extend-exclude = [
+  "*color",
+  "**/*.color",
+  "**/.signingmanager/**",
+  "**/*.current",
+  "cht.sh.txt",
+  # from pre-commit hook
+  "**/vimrc.d/snips/**",
+  "**/vimrc.d/shortcuts",
+  "**/.gpg/**"
+]
+
+[default]
+binary = false
+check-filename = true
+check-file = true
+unicode=true
+locale = "en"
+extend-ignore-re = [
+  "(?m)^\\s*bind.*$",
+  "(?m)^\\s*alias.*$",
+  "(?m)^\\s*snip.*$",
+  # [c]ommit, d[i]ff, ...
+  "\\w*\\[\\w\\]\\w*",
+  # ansicolor
+  "\\w+=.*\\\\033.*",
+  "\\w*\\\\033\\S+",
+  # $(c xxx)..$(c)
+  "\\$\\([cC][^)]+\\)\\S*",
+  "\\S+\\$\\([cC][^)]+\\)\\S*",
+  # vim modeline
+  "(?m)^.*\\bvim:.*$"
+]
+
+[default.extend-words]
+# <typo> = "<correction>"
+caf = 'caf'
+sav = 'sav'
+Wew = 'Wew'
+STARTIN = 'STARTIN'
+siduction = 'siduction'
+iz = 'iz'
+windo = 'windo'
+ue = 'ue'
+Mis = 'Mis'
+Ot = 'Ot'
+ba = 'ba'
+UMARK = 'UMARK'
+BRE = 'BRE'
+fpr = 'fpr'
