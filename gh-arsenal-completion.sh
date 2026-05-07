@@ -4,7 +4,7 @@
 #     FileName : gh-arsenal-completion.sh
 #       Author : marslo
 #      Created : 2026-02-27 23:04:41
-#   LastChange : 2026-05-07 00:34:36
+#   LastChange : 2026-05-07 03:52:04
 #  Description : bash_completion for $ gh-ops, $ gh ops, $ gh-new, $ gh new
 #=============================================================================
 
@@ -22,25 +22,12 @@ function _compgen_nocase() {
 }
 
 #=============================================================================#
-# gh-ops: passthrough completion after '--'                                   #
-#   ops flag → gh pr subcommand, then ask gh's own __complete engine         #
+# shared passthrough completion for gh pr subcommands                         #
+#   usage: __gh_pr_passthrough_complete <subcmd> <cur> <exclude-pattern>      #
+#   exclude-pattern: ERE alternation passed to grep -vE "^--(<pat>)$"         #
 #=============================================================================#
-# map an ops flag to the gh-pr subcommand it delegates to
-function __gh_ops_flag_to_subcmd() {
-  case "$1" in
-    -c | --checkout       ) echo 'checkout' ;;
-    -C | --close          ) echo 'close'    ;;
-    -s | --squash         ) echo 'merge'    ;;
-    -r | --rebase         ) echo 'merge'    ;;
-    -a | --approve        ) echo 'review'   ;;
-    -M | --comment        ) echo 'review'   ;;
-         --request-changes) echo 'review'   ;;
-  esac
-}
-
-# dynamically fetch flags from `gh __complete pr <subcmd>`, strip meta-flags already handled by gh-ops itself (--help, --repo)
-function __gh_ops_passthrough_complete() {
-  local subcmd="${1}" cur="${2}"
+function __gh_pr_passthrough_complete() {
+  local subcmd="${1}" cur="${2}" exclude="${3:-help}"
   [[ -z "${subcmd}" ]] && return
 
   local raw flags
@@ -49,7 +36,7 @@ function __gh_ops_passthrough_complete() {
     printf '%s\n' "${raw}" \
       | sed 's/[[:space:]].*//' \
       | grep --color=never -E '^--' \
-      | grep --color=never -vE '^--(help|repo)$' \
+      | grep --color=never -vE "^--(${exclude})$" \
       || true
   )
   [[ -z "${flags}" ]] && return
@@ -87,6 +74,12 @@ function __gh_ops_do_complete() {
               --dryrun
               -h --help"
 
+  local has_setup=0
+  for (( i=1; i<COMP_CWORD; i++ )); do
+    [[ "${COMP_WORDS[i]}" == "--setup" ]] && { has_setup=1; break; }
+  done
+  (( has_setup )) && opts+=" --force"
+
   case "${prev}" in
     -S|--state ) COMPREPLY=( $(compgen -W "open closed all merged" -- "${cur}") ); return ;;
     -B|--base  ) COMPREPLY=( $(compgen -W "$(git branch --format='%(refname:short)' 2>/dev/null)" -- "${cur}") ); return ;;
@@ -105,20 +98,22 @@ function __gh_ops_do_complete() {
   done
 
   if (( dashdash_pos >= 0 )); then
+    local -A _map=(
+      [-c]=checkout  [--checkout]=checkout
+      [-C]=close     [--close]=close
+      [-s]=merge     [--squash]=merge
+      [-r]=merge     [--rebase]=merge
+      [-a]=review    [--approve]=review
+      [-M]=review    [--comment]=review
+                     [--request-changes]=review
+    )
     local subcmd='' _w
     for (( i=1; i < dashdash_pos; i++ )); do
       _w="${COMP_WORDS[i]}"
-      case "${_w}" in
-        -c|--checkout        ) subcmd='checkout'; break ;;
-        -C|--close           ) subcmd='close';    break ;;
-        -s|--squash          ) subcmd='merge';    break ;;
-        -r|--rebase          ) subcmd='merge';    break ;;
-        -a|--approve         ) subcmd='review';   break ;;
-        -M|--comment         ) subcmd='review';   break ;;
-           --request-changes ) subcmd='review';   break ;;
-      esac
+      subcmd="${_map[${_w}]:-}"
+      [[ -n "${subcmd}" ]] && break
     done
-    __gh_ops_passthrough_complete "${subcmd}" "${cur}"
+    __gh_pr_passthrough_complete "${subcmd}" "${cur}" "help|repo"
     return
   fi
 
@@ -141,16 +136,30 @@ function __gh_new_do_complete() {
               -v --verbose
               -a --auto
               -d --draft
+              --setup
               -D --dryrun
               -h --help"
+
+  local has_setup=0
+  for (( i=1; i<COMP_CWORD; i++ )); do
+    [[ "${COMP_WORDS[i]}" == "--setup" ]] && { has_setup=1; break; }
+  done
+  (( has_setup )) && opts+=" --force"
 
   case "${prev}" in
     -l|--label ) COMPREPLY=(); return ;;
   esac
 
+  # ── after '--': passthrough to gh pr create completion ─────────────────────
+  local dashdash_pos=-1
   for (( i=1; i < COMP_CWORD; i++ )); do
-    [[ "${COMP_WORDS[i]}" == "--" ]] && return
+    [[ "${COMP_WORDS[i]}" == "--" ]] && { dashdash_pos=${i}; break; }
   done
+
+  if (( dashdash_pos >= 0 )); then
+    __gh_pr_passthrough_complete "create" "${cur}" "help|label|draft"
+    return
+  fi
 
   if [[ ${cur} == -* ]] || [[ ${COMP_CWORD} -ge 1 ]]; then
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -170,7 +179,7 @@ function _gh_new() { __gh_new_do_complete; }
 complete -F _gh_new gh-new
 
 #=============================================================================#
-# for $ gh ops <tab> and $ gh new <tab>                                      #
+# for $ gh ops <tab> and $ gh new <tab>                                       #
 #=============================================================================#
 __orig_start_gh=$(declare -f __start_gh)
 eval "${__orig_start_gh//__start_gh/__start_gh_orig}"
