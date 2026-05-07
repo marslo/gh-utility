@@ -4,7 +4,7 @@
 #     FileName : gh-arsenal-completion.sh
 #       Author : marslo
 #      Created : 2026-02-27 23:04:41
-#   LastChange : 2026-03-20 21:52:17
+#   LastChange : 2026-05-07 00:34:36
 #  Description : bash_completion for $ gh-ops, $ gh ops, $ gh-new, $ gh new
 #=============================================================================
 
@@ -16,9 +16,45 @@ function _compgen_nocase() {
   COMPREPLY=()
   for word in ${candidates}; do
     if [[ "${word,,}" == "${cur,,}"* ]]; then
-      COMPREPLY+=( "$word" )
+      COMPREPLY+=( "${word}" )
     fi
   done
+}
+
+#=============================================================================#
+# gh-ops: passthrough completion after '--'                                   #
+#   ops flag → gh pr subcommand, then ask gh's own __complete engine         #
+#=============================================================================#
+# map an ops flag to the gh-pr subcommand it delegates to
+function __gh_ops_flag_to_subcmd() {
+  case "$1" in
+    -c | --checkout       ) echo 'checkout' ;;
+    -C | --close          ) echo 'close'    ;;
+    -s | --squash         ) echo 'merge'    ;;
+    -r | --rebase         ) echo 'merge'    ;;
+    -a | --approve        ) echo 'review'   ;;
+    -M | --comment        ) echo 'review'   ;;
+         --request-changes) echo 'review'   ;;
+  esac
+}
+
+# dynamically fetch flags from `gh __complete pr <subcmd>`, strip meta-flags already handled by gh-ops itself (--help, --repo)
+function __gh_ops_passthrough_complete() {
+  local subcmd="${1}" cur="${2}"
+  [[ -z "${subcmd}" ]] && return
+
+  local raw flags
+  raw=$(gh __complete pr "${subcmd}" '' "${cur}" 2>/dev/null) || true
+  flags=$(
+    printf '%s\n' "${raw}" \
+      | sed 's/[[:space:]].*//' \
+      | grep --color=never -E '^--' \
+      | grep --color=never -vE '^--(help|repo)$' \
+      || true
+  )
+  [[ -z "${flags}" ]] && return
+  # shellcheck disable=SC2207
+  COMPREPLY=( $(compgen -W "${flags}" -- "${cur}") )
 }
 
 #=============================================================================#
@@ -62,9 +98,29 @@ function __gh_ops_do_complete() {
     -l|--add-label|-L|--remove-label|-M|--comment|--request-changes|-a|--approve ) COMPREPLY=(); return ;;
   esac
 
+  # ── after '--': context-sensitive passthrough completion ───────────────────
+  local dashdash_pos=-1
   for (( i=1; i < COMP_CWORD; i++ )); do
-    [[ "${COMP_WORDS[i]}" == "--" ]] && return
+    [[ "${COMP_WORDS[i]}" == "--" ]] && { dashdash_pos=${i}; break; }
   done
+
+  if (( dashdash_pos >= 0 )); then
+    local subcmd='' _w
+    for (( i=1; i < dashdash_pos; i++ )); do
+      _w="${COMP_WORDS[i]}"
+      case "${_w}" in
+        -c|--checkout        ) subcmd='checkout'; break ;;
+        -C|--close           ) subcmd='close';    break ;;
+        -s|--squash          ) subcmd='merge';    break ;;
+        -r|--rebase          ) subcmd='merge';    break ;;
+        -a|--approve         ) subcmd='review';   break ;;
+        -M|--comment         ) subcmd='review';   break ;;
+           --request-changes ) subcmd='review';   break ;;
+      esac
+    done
+    __gh_ops_passthrough_complete "${subcmd}" "${cur}"
+    return
+  fi
 
   if [[ ${cur} == -* ]] || [[ ${COMP_CWORD} -ge 1 ]]; then
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
