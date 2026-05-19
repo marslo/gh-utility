@@ -1,3 +1,22 @@
+## [1.1.0](https://github.com/marslo/gh-utility/compare/v1.0.0...v1.1.0) (2026-05-19)
+
+### CI/CD
+
+* ci: disable precommit automatic upgrade via PR
+  Signed-off-by: marslo <marslo.jiao@gmail.com>
+* ci(workflow): using pre-commit workflow instead of pre-commit application, to disable PR auto creation
+  Signed-off-by: marslo <marslo.jiao@gmail.com>
+
+### Code Refactoring
+
+* refactor: refactor gh-preview to reduce redundancy
+  Signed-off-by: marslo <marslo.jiao@gmail.com>
+
+### Features
+
+* feat(issue): add issue list and preview
+  Signed-off-by: marslo <marslo.jiao@gmail.com>
+
 ## 1.0.0 (2026-05-07)
 
 ### Features
