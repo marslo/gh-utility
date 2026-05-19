@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck source=/dev/null disable=SC2155,SC2016,SC2059,SC2064
 #=============================================================================
-#     FileName : getPRId
+#     FileName : gh-preview
 #       Author : marslo
 #      Created : 2026-03-19 22:36:00
-#   LastChange : 2026-03-19 23:02:11
+#   LastChange : 2026-05-18 20:55:26
 #  Description : common lib - interactively select a GitHub PR ID via fzf
 #=============================================================================
 
 declare -r _GHD_DIR="$( dirname "${BASH_SOURCE[0]:-$0}" )"
-declare -r _GHD_JQ_FILE="${_GHD_DIR}/gh-ops-preview.jq"
+declare -r _GHD_JQ_FILE="${_GHD_DIR}/gh-pr-preview.jq"
 
 # inline jc() for ANSI color codes if not already provided by the caller
 # @credit: https://github.com/ppo/bash-colors
@@ -83,7 +83,7 @@ function getPRId() {
   BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
   BIND_FOCUS_CMD+='fi'
 
-  # ctrl-/:transform
+  # ctrl-\:transform
   local BIND_TOGGLE_CMD=''
   BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
   BIND_TOGGLE_CMD+='  echo "${CMD_LOCAL}"; '
@@ -91,11 +91,18 @@ function getPRId() {
   BIND_TOGGLE_CMD+='  echo "${CMD_REMOTE}"; '
   BIND_TOGGLE_CMD+='fi'
 
+  local _pr_json
+  _pr_json=$(gh pr list --json 'number,title,author,createdAt,updatedAt,body' "$@")
+  if [[ "$(echo "${_pr_json}" | jq 'length')" -eq 0 ]]; then
+    printf '\033[0;33mWARNING\033[0m: no pull requests found\n' >&2
+    return 1
+  fi
+
   local PR_ID=''
   PR_ID=$(
-    gh pr list --json 'number,title,author,createdAt,updatedAt,body' "$@" |
+    echo "${_pr_json}" |
     jq ".[] | ${TEMPLATE}" |
-    sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\u001b/\\033/g' |
+    sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
     tee "${CACHE_FILE}" |
     fzf +m --ansi \
         --with-nth=1 \
@@ -107,7 +114,7 @@ function getPRId() {
         --preview-label=$'\033[1;35m[ Local ]\033[0m' \
         --bind "result:transform-list-label:${BIND_RESULT_CMD}" \
         --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
-        --bind "ctrl-/:transform:${BIND_TOGGLE_CMD}" \
+        --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
         --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
         --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs gh pr view --web)" |
     sed -En 's/^#([0-9]+).*/\1/p'
@@ -115,6 +122,109 @@ function getPRId() {
 
   unset JQ_FILTER CMD_REMOTE CMD_LOCAL
   test -n "${PR_ID}" && echo "${PR_ID}" || return 1
+}
+
+# getIssueId - interactively pick a GitHub issue via fzf and print "#<number> - <title>"
+#
+# Usage : getIssueId [gh issue list options...]
+#         e.g.  getIssueId --state open
+#               getIssueId --state closed --repo owner/repo
+# shellcheck disable=SC2016,SC2064
+function getIssueId() {
+  local _ISSUE_PREVIEW_SH="${_GHD_DIR}/gh-issue-preview.sh"
+  test -x "${_ISSUE_PREVIEW_SH}" || {
+    printf '\033[0;31mERROR\033[0m: missing preview script at %s\n' "${_ISSUE_PREVIEW_SH}" >&2
+    return 1
+  }
+
+  local CACHE_FILE="/tmp/gh_getIssueId_cache_$$"
+  trap "rm -f '${CACHE_FILE}'" RETURN
+  : > "${CACHE_FILE}"
+
+  local TEMPLATE='"'
+  TEMPLATE+='#\(.number) - \(.title)'
+  TEMPLATE+='\t'
+  TEMPLATE+="$(jc Cs)Author:$(jc) \(.author.login)\n"
+  TEMPLATE+="$(jc Ys)Created:$(jc) \(.createdAt) $(jc Ms)•$(jc) $(jc Ys)Updated:$(jc) \(.updatedAt)\n\n"
+  TEMPLATE+='\(.title)'
+  TEMPLATE+='\( .title as $t | (.body // "") | if startswith($t) then .[($t | length):] else . end | gsub("(?s)[ \t]*<!--.*?-->[ \t]*\n?"; "") | sub("^\\s+"; "") | if . == "" then "" else "\n\n" + . end )'
+  TEMPLATE+='"'
+
+  local EXTRACT_ID_CMD='sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | sed -En "s/^#([0-9]+).*/\1/p"'
+
+  local REMOTE_CMD=''
+  REMOTE_CMD+='change-preview('
+  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
+  REMOTE_CMD+='if [ -n "${id}" ]; then "'"${_ISSUE_PREVIEW_SH}"'" "${id}"; else echo "Loading Remote ..."; fi'
+  REMOTE_CMD+=')+'
+  REMOTE_CMD+='transform-preview-label('
+  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
+  REMOTE_CMD+='printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
+  REMOTE_CMD+=')'
+  export ISSUE_CMD_REMOTE="${REMOTE_CMD}"
+
+  local LOCAL_CMD=''
+  LOCAL_CMD+='change-preview('
+  LOCAL_CMD+='content=$( sed -n "$(({n}+1))p" "'${CACHE_FILE}'" | cut -f2- ); '
+  LOCAL_CMD+='printf "%b\n" "${content}"'
+  LOCAL_CMD+=')+'
+  LOCAL_CMD+='transform-preview-label('
+  LOCAL_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
+  LOCAL_CMD+='printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
+  LOCAL_CMD+=')'
+  export ISSUE_CMD_LOCAL="${LOCAL_CMD}"
+
+  # result:transform-list-label
+  local BIND_RESULT_CMD='if [[ -z ${FZF_QUERY} ]]; then echo " ${FZF_MATCH_COUNT} items "; else echo " ${FZF_MATCH_COUNT} matches for [${FZF_QUERY}] "; fi'
+
+  # focus:transform-preview-label
+  local BIND_FOCUS_CMD=''
+  BIND_FOCUS_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
+  BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
+  BIND_FOCUS_CMD+='else '
+  BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
+  BIND_FOCUS_CMD+='fi'
+
+  # ctrl-\:transform
+  local BIND_TOGGLE_CMD=''
+  BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  BIND_TOGGLE_CMD+='  echo "${ISSUE_CMD_LOCAL}"; '
+  BIND_TOGGLE_CMD+='else '
+  BIND_TOGGLE_CMD+='  echo "${ISSUE_CMD_REMOTE}"; '
+  BIND_TOGGLE_CMD+='fi'
+
+  local _issue_json
+  _issue_json=$(gh issue list --json 'number,title,author,createdAt,updatedAt,body' "$@")
+  if [[ "$(echo "${_issue_json}" | jq 'length')" -eq 0 ]]; then
+    printf '\033[0;33mWARNING\033[0m: no issues found\n' >&2
+    return 1
+  fi
+
+  local RESULT=''
+  RESULT=$(
+    echo "${_issue_json}" |
+    jq ".[] | ${TEMPLATE}" |
+    sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
+    tee "${CACHE_FILE}" |
+    fzf +m --ansi \
+        --with-nth=1 \
+        --delimiter='\t' \
+        --color='query:bold:italic:magenta,prompt:italic' \
+        --preview-window=top:65%:wrap \
+        --prompt=' Issue: ' --info='inline-right:  ' \
+        --preview='content=$(sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | cut -f2-); printf "%b\n" "${content}"' \
+        --preview-label=$'\033[1;35m[ Local ]\033[0m' \
+        --bind "result:transform-list-label:${BIND_RESULT_CMD}" \
+        --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
+        --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
+        --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
+        --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs gh issue view --web)" |
+    cut -f1
+  )
+
+  unset ISSUE_CMD_REMOTE ISSUE_CMD_LOCAL
+  test -n "${RESULT}" && echo "${RESULT}" || return 1
 }
 
 # vim:tabstop=2:softtabstop=2:shiftwidth=2:expandtab:filetype=sh:

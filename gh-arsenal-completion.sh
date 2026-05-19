@@ -66,6 +66,7 @@ function __gh_ops_do_complete() {
               --request-changes
               --ready
               --draft
+              --issue
               -S --state
               -B --base
               -R --repo
@@ -81,6 +82,7 @@ function __gh_ops_do_complete() {
   (( has_setup )) && opts+=" --force"
 
   case "${prev}" in
+    --issue    ) COMPREPLY=( $(compgen -W "open closed" -- "${cur}") ); return ;;
     -S|--state ) COMPREPLY=( $(compgen -W "open closed all merged" -- "${cur}") ); return ;;
     -B|--base  ) COMPREPLY=( $(compgen -W "$(git branch --format='%(refname:short)' 2>/dev/null)" -- "${cur}") ); return ;;
     -R|--repo  ) local repos=''
@@ -181,8 +183,10 @@ complete -F _gh_new gh-new
 #=============================================================================#
 # for $ gh ops <tab> and $ gh new <tab>                                       #
 #=============================================================================#
-__orig_start_gh=$(declare -f __start_gh)
-eval "${__orig_start_gh//__start_gh/__start_gh_orig}"
+if ! declare -f __start_gh_orig &>/dev/null; then
+  __orig_start_gh=$(declare -f __start_gh)
+  eval "${__orig_start_gh//__start_gh/__start_gh_orig}"
+fi
 
 function __start_gh() {
   case "${COMP_WORDS[1]}" in
