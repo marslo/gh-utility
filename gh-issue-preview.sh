@@ -4,12 +4,16 @@
 #     FileName : gh-issue-preview.sh
 #       Author : marslo
 #      Created : 2026-05-18 20:50:00
-#   LastChange : 2026-05-18 20:56:16
+#   LastChange : 2026-05-18 22:08:17
 #  Description : fzf REMOTE preview for GitHub issues (text + inline images)
 #       Syntax : gh-ops-issue-preview.sh <issue_id>
 #=============================================================================
 
 set -euo pipefail
+
+# clear previous kitty graphics
+printf "\e[0m"
+printf "\e_Ga=d\e\\" > /dev/tty 2>/dev/null || true
 
 declare _id="${1:?issue id required}"
 declare _HERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")"
@@ -19,9 +23,8 @@ declare _JQ_FILE="${_HERE}/gh-issue-preview.jq"
 
 # fetch issue JSON once
 declare _json
-_json=$(gh issue view "${_id}" \
-        --json state,stateReason,author,createdAt,updatedAt,labels,assignees,milestone,comments,body \
-        2>/dev/null) || { echo "Failed to fetch issue #${_id}"; exit 1; }
+_json=$(gh issue view "${_id}" --json state,stateReason,author,createdAt,updatedAt,labels,assignees,milestone,comments,body  2>/dev/null) \
+      || { echo "Failed to fetch issue #${_id}"; exit 1; }
 
 # formatted text output
 echo "${_json}" | jq -r "$(cat "${_JQ_FILE}")"
@@ -51,10 +54,11 @@ function _show_image() {
   local _file="${1:?}"
   local dim="${FZF_PREVIEW_COLUMNS:-80}x${FZF_PREVIEW_LINES:-40}"
 
-  if { [[ ${KITTY_WINDOW_ID:-} ]] || [[ ${GHOSTTY_RESOURCES_DIR:-} ]]; } && type -P kitten >/dev/null 2>&1; then
-    kitten icat --clear --transfer-mode=memory --unicode-placeholder --stdin=no --place="${dim}@0x0" "${_file}" | sed '$d' | sed $'$s/$/\e[m/'
-  elif [[ -x "${CHAFA_PATH}" ]]; then
+  # prefer chafa in fzf preview (renders instantly as ANSI art, no placeholder box)
+  if [[ -x "${CHAFA_PATH}" ]]; then
     "${CHAFA_CMD[@]}" --size "${dim}" "${_file}"
+  elif { [[ ${KITTY_WINDOW_ID:-} ]] || [[ ${GHOSTTY_RESOURCES_DIR:-} ]]; } && type -P kitten >/dev/null 2>&1; then
+    kitten icat --clear --transfer-mode=memory --unicode-placeholder --stdin=no --place="${dim}@0x0" "${_file}" | sed '$d' | sed $'$s/$/\e[m/'
   elif type -P imgcat >/dev/null 2>&1; then
     imgcat -W "${FZF_PREVIEW_COLUMNS:-80}" -H "${FZF_PREVIEW_LINES:-40}" "${_file}"
   fi

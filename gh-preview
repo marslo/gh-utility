@@ -4,8 +4,8 @@
 #     FileName : gh-preview
 #       Author : marslo
 #      Created : 2026-03-19 22:36:00
-#   LastChange : 2026-05-18 20:55:26
-#  Description : common lib - interactively select a GitHub PR ID via fzf
+#   LastChange : 2026-05-18 22:02:00
+#  Description : common lib - interactively select a GitHub PR/Issue via fzf
 #=============================================================================
 
 declare -r _GHD_DIR="$( dirname "${BASH_SOURCE[0]:-$0}" )"
@@ -20,6 +20,118 @@ if ! declare -f jc &>/dev/null; then
     printf "${1}" | sed 's/\(.\)/\1;/g;s/\([SDIUFNHT]\)/1\1/g;s/\([KRGYBMCW]\)/3\1/g;s/\([krgybmcw]\)/4\1/g;y/SDIUFNHTsdiufnhtKRGYBMCWkrgybmcw/12345789123457890123456701234567/;s/^\(.*\);$/\\u001b[\1m/g'
   }
 fi
+
+# =========================================================================== #
+# shared constants                                                            #
+# =========================================================================== #
+
+# fzf dynamic preview height: list max 5 / min 3 (fzf hardcoded minimum)
+declare _GHD_RESIZE_CMD=''
+_GHD_RESIZE_CMD+='list=$(( FZF_MATCH_COUNT > 5 ? 5 : FZF_MATCH_COUNT )); '
+_GHD_RESIZE_CMD+='(( list < 3 )) && list=3; '
+_GHD_RESIZE_CMD+='lines=$(( FZF_LINES - list - 3 )); '
+_GHD_RESIZE_CMD+='(( lines < 3 )) && lines=3; '
+_GHD_RESIZE_CMD+='if [[ -z "${FZF_QUERY:-}" ]]; then label=" ${FZF_MATCH_COUNT} items "; else label=" ${FZF_MATCH_COUNT} matches for [${FZF_QUERY}] "; fi; '
+_GHD_RESIZE_CMD+='if [[ ${FZF_MATCH_COUNT} -eq 0 ]]; then '
+_GHD_RESIZE_CMD+='  echo "change-preview-window(hidden)+change-list-label(${label})"; '
+_GHD_RESIZE_CMD+='else '
+_GHD_RESIZE_CMD+='  echo "change-preview-window(top,${lines},wrap)+change-list-label(${label})"; '
+_GHD_RESIZE_CMD+='fi'
+declare -r _GHD_RESIZE_CMD
+
+# jq template: "#<number> - <title>\t<local preview content>"
+declare _GHD_TEMPLATE='"'
+_GHD_TEMPLATE+='#\(.number) - \(.title)'
+_GHD_TEMPLATE+='\t'
+_GHD_TEMPLATE+="$(jc Cs)Author:$(jc) \(.author.login)\n"
+_GHD_TEMPLATE+="$(jc Ys)Created:$(jc) \(.createdAt) $(jc Ms)•$(jc) $(jc Ys)Updated:$(jc) \(.updatedAt)\n\n"
+_GHD_TEMPLATE+='\(.title)'
+_GHD_TEMPLATE+='\( .title as $t | (.body // "") | if startswith($t) then .[($t | length):] else . end | gsub("(?s)[ \t]*<!--.*?-->[ \t]*\n?"; "") | sub("^\\s+"; "") | if . == "" then "" else "\n\n" + . end )'
+_GHD_TEMPLATE+='"'
+declare -r _GHD_TEMPLATE
+
+# =========================================================================== #
+# shared helpers                                                              #
+# =========================================================================== #
+
+# _buildBinds <cache_file> <extract_id_cmd>
+#   sets exported: CMD_LOCAL
+#   sets local-ish: BIND_FOCUS_CMD, BIND_TOGGLE_CMD
+function _buildBinds() {
+  local _cache="$1" _eid="$2"
+
+  CMD_LOCAL=''
+  CMD_LOCAL+='change-preview('
+  CMD_LOCAL+='content=$( sed -n "$(({n}+1))p" "'"${_cache}"'" | cut -f2- ); '
+  CMD_LOCAL+='printf "%b\n" "${content}"'
+  CMD_LOCAL+=')+'
+  CMD_LOCAL+='transform-preview-label('
+  CMD_LOCAL+='id=$( '"${_eid}"' ); '
+  CMD_LOCAL+='printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
+  CMD_LOCAL+=')'
+  export CMD_LOCAL
+
+  BIND_FOCUS_CMD=''
+  BIND_FOCUS_CMD+='id=$( '"${_eid}"' ); '
+  BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
+  BIND_FOCUS_CMD+='else '
+  BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
+  BIND_FOCUS_CMD+='fi'
+
+  BIND_TOGGLE_CMD=''
+  BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  BIND_TOGGLE_CMD+='  echo "${CMD_LOCAL}"; '
+  BIND_TOGGLE_CMD+='else '
+  BIND_TOGGLE_CMD+='  echo "${CMD_REMOTE}"; '
+  BIND_TOGGLE_CMD+='fi'
+}
+
+# _buildRemoteCmd <extract_id_cmd> <preview_command>
+#   sets exported: CMD_REMOTE
+function _buildRemoteCmd() {
+  local _eid="$1" _pcmd="$2"
+
+  CMD_REMOTE=''
+  CMD_REMOTE+='change-preview('
+  CMD_REMOTE+='id=$( '"${_eid}"' ); '
+  CMD_REMOTE+='if [ -n "${id}" ]; then '"${_pcmd}"'; else echo "Loading Remote ..."; fi'
+  CMD_REMOTE+=')+'
+  CMD_REMOTE+='transform-preview-label('
+  CMD_REMOTE+='id=$( '"${_eid}"' ); '
+  CMD_REMOTE+='printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
+  CMD_REMOTE+=')'
+  export CMD_REMOTE
+}
+
+# _fzfSelect <prompt> <cache_file> <view_cmd>
+#   view_cmd: "gh pr view" or "gh issue view" (for ctrl-o)
+# shellcheck disable=SC2016
+function _fzfSelect() {
+  local _prompt="$1" _cache="$2" _vcmd="$3"
+
+  fzf +m --ansi \
+      --with-nth=1 \
+      --delimiter='\t' \
+      --height=65% \
+      --no-separator \
+      --color='query:bold:italic:magenta,prompt:italic' \
+      --preview-window=top:wrap \
+      --prompt="${_prompt}" --info='inline-right:  ' \
+      --preview='content=$(sed -n "$(( {n}+1 ))p" "'"${_cache}"'" | cut -f2-); printf "%b\n" "${content}"' \
+      --preview-label=$'\033[1;35m[ Local ]\033[0m' \
+      --bind "result:transform:${_GHD_RESIZE_CMD}" \
+      --bind "resize:transform:${_GHD_RESIZE_CMD}" \
+      --bind "load:transform:${_GHD_RESIZE_CMD}" \
+      --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
+      --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
+      --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
+      --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs ${_vcmd} --web)"
+}
+
+# =========================================================================== #
+# getPRId                                                                     #
+# =========================================================================== #
 
 # getPRId - interactively pick a GitHub PR via fzf and print the PR number
 #
@@ -38,58 +150,10 @@ function getPRId() {
   trap "rm -f '${CACHE_FILE}'" RETURN
   : > "${CACHE_FILE}"
 
-  local TEMPLATE='"'
-  TEMPLATE+='#\(.number) - \(.title)'
-  TEMPLATE+='\t'
-  TEMPLATE+="$(jc Cs)Author:$(jc) \(.author.login)\n"
-  TEMPLATE+="$(jc Ys)Created:$(jc) \(.createdAt) $(jc Ms)•$(jc) $(jc Ys)Updated:$(jc) \(.updatedAt)\n\n"
-  TEMPLATE+='\(.title)'
-  TEMPLATE+='\( .title as $t | (.body // "") | if startswith($t) then .[($t | length):] else . end | gsub("(?s)[ \t]*<!--.*?-->[ \t]*\n?"; "") | sub("^\\s+"; "") | if . == "" then "" else "\n\n" + . end )'
-  TEMPLATE+='"'
-
   local EXTRACT_ID_CMD='sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | sed -En "s/^#([0-9]+).*/\1/p"'
 
-  local REMOTE_CMD=''
-  REMOTE_CMD+='change-preview('
-  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  REMOTE_CMD+='if [ -n "${id}" ]; then gh pr view "${id}" --json mergeable,reviewDecision,reviewRequests,reviews,body,labels,state --jq "$JQ_FILTER" 2>/dev/null; else echo "Loading Remote ..."; fi'
-  REMOTE_CMD+=')+'
-  REMOTE_CMD+='transform-preview-label('
-  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  REMOTE_CMD+='printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
-  REMOTE_CMD+=')'
-  export CMD_REMOTE="${REMOTE_CMD}"
-
-  local LOCAL_CMD=''
-  LOCAL_CMD+='change-preview('
-  LOCAL_CMD+='content=$( sed -n "$(({n}+1))p" "'${CACHE_FILE}'" | cut -f2- ); '
-  LOCAL_CMD+='printf "%b\n" "${content}"'
-  LOCAL_CMD+=')+'
-  LOCAL_CMD+='transform-preview-label('
-  LOCAL_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  LOCAL_CMD+='printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
-  LOCAL_CMD+=')'
-  export CMD_LOCAL="${LOCAL_CMD}"
-
-  # result:transform-list-label
-  local BIND_RESULT_CMD='if [[ -z ${FZF_QUERY} ]]; then echo " ${FZF_MATCH_COUNT} items "; else echo " ${FZF_MATCH_COUNT} matches for [${FZF_QUERY}] "; fi'
-
-  # focus:transform-preview-label
-  local BIND_FOCUS_CMD=''
-  BIND_FOCUS_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='else '
-  BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='fi'
-
-  # ctrl-\:transform
-  local BIND_TOGGLE_CMD=''
-  BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_TOGGLE_CMD+='  echo "${CMD_LOCAL}"; '
-  BIND_TOGGLE_CMD+='else '
-  BIND_TOGGLE_CMD+='  echo "${CMD_REMOTE}"; '
-  BIND_TOGGLE_CMD+='fi'
+  _buildRemoteCmd "${EXTRACT_ID_CMD}" 'gh pr view "${id}" --json mergeable,reviewDecision,reviewRequests,reviews,body,labels,state --jq "$JQ_FILTER" 2>/dev/null'
+  _buildBinds "${CACHE_FILE}" "${EXTRACT_ID_CMD}"
 
   local _pr_json
   _pr_json=$(gh pr list --json 'number,title,author,createdAt,updatedAt,body' "$@")
@@ -101,28 +165,20 @@ function getPRId() {
   local PR_ID=''
   PR_ID=$(
     echo "${_pr_json}" |
-    jq ".[] | ${TEMPLATE}" |
+    jq ".[] | ${_GHD_TEMPLATE}" |
     sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
     tee "${CACHE_FILE}" |
-    fzf +m --ansi \
-        --with-nth=1 \
-        --delimiter='\t' \
-        --color='query:bold:italic:magenta,prompt:italic' \
-        --preview-window=top:65%:wrap \
-        --prompt=' PR: ' --info='inline-right:  ' \
-        --preview='content=$(sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | cut -f2-); printf "%b\n" "${content}"' \
-        --preview-label=$'\033[1;35m[ Local ]\033[0m' \
-        --bind "result:transform-list-label:${BIND_RESULT_CMD}" \
-        --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
-        --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
-        --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
-        --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs gh pr view --web)" |
+    _fzfSelect ' PR: ' "${CACHE_FILE}" 'gh pr view' |
     sed -En 's/^#([0-9]+).*/\1/p'
   )
 
   unset JQ_FILTER CMD_REMOTE CMD_LOCAL
   test -n "${PR_ID}" && echo "${PR_ID}" || return 1
 }
+
+# =========================================================================== #
+# getIssueId                                                                  #
+# =========================================================================== #
 
 # getIssueId - interactively pick a GitHub issue via fzf and print "#<number> - <title>"
 #
@@ -141,58 +197,10 @@ function getIssueId() {
   trap "rm -f '${CACHE_FILE}'" RETURN
   : > "${CACHE_FILE}"
 
-  local TEMPLATE='"'
-  TEMPLATE+='#\(.number) - \(.title)'
-  TEMPLATE+='\t'
-  TEMPLATE+="$(jc Cs)Author:$(jc) \(.author.login)\n"
-  TEMPLATE+="$(jc Ys)Created:$(jc) \(.createdAt) $(jc Ms)•$(jc) $(jc Ys)Updated:$(jc) \(.updatedAt)\n\n"
-  TEMPLATE+='\(.title)'
-  TEMPLATE+='\( .title as $t | (.body // "") | if startswith($t) then .[($t | length):] else . end | gsub("(?s)[ \t]*<!--.*?-->[ \t]*\n?"; "") | sub("^\\s+"; "") | if . == "" then "" else "\n\n" + . end )'
-  TEMPLATE+='"'
-
   local EXTRACT_ID_CMD='sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | sed -En "s/^#([0-9]+).*/\1/p"'
 
-  local REMOTE_CMD=''
-  REMOTE_CMD+='change-preview('
-  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  REMOTE_CMD+='if [ -n "${id}" ]; then "'"${_ISSUE_PREVIEW_SH}"'" "${id}"; else echo "Loading Remote ..."; fi'
-  REMOTE_CMD+=')+'
-  REMOTE_CMD+='transform-preview-label('
-  REMOTE_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  REMOTE_CMD+='printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
-  REMOTE_CMD+=')'
-  export ISSUE_CMD_REMOTE="${REMOTE_CMD}"
-
-  local LOCAL_CMD=''
-  LOCAL_CMD+='change-preview('
-  LOCAL_CMD+='content=$( sed -n "$(({n}+1))p" "'${CACHE_FILE}'" | cut -f2- ); '
-  LOCAL_CMD+='printf "%b\n" "${content}"'
-  LOCAL_CMD+=')+'
-  LOCAL_CMD+='transform-preview-label('
-  LOCAL_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  LOCAL_CMD+='printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
-  LOCAL_CMD+=')'
-  export ISSUE_CMD_LOCAL="${LOCAL_CMD}"
-
-  # result:transform-list-label
-  local BIND_RESULT_CMD='if [[ -z ${FZF_QUERY} ]]; then echo " ${FZF_MATCH_COUNT} items "; else echo " ${FZF_MATCH_COUNT} matches for [${FZF_QUERY}] "; fi'
-
-  # focus:transform-preview-label
-  local BIND_FOCUS_CMD=''
-  BIND_FOCUS_CMD+='id=$( '${EXTRACT_ID_CMD}' ); '
-  BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='else '
-  BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='fi'
-
-  # ctrl-\:transform
-  local BIND_TOGGLE_CMD=''
-  BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_TOGGLE_CMD+='  echo "${ISSUE_CMD_LOCAL}"; '
-  BIND_TOGGLE_CMD+='else '
-  BIND_TOGGLE_CMD+='  echo "${ISSUE_CMD_REMOTE}"; '
-  BIND_TOGGLE_CMD+='fi'
+  _buildRemoteCmd "${EXTRACT_ID_CMD}" '"'"${_ISSUE_PREVIEW_SH}"'" "${id}"'
+  _buildBinds "${CACHE_FILE}" "${EXTRACT_ID_CMD}"
 
   local _issue_json
   _issue_json=$(gh issue list --json 'number,title,author,createdAt,updatedAt,body' "$@")
@@ -204,26 +212,14 @@ function getIssueId() {
   local RESULT=''
   RESULT=$(
     echo "${_issue_json}" |
-    jq ".[] | ${TEMPLATE}" |
+    jq ".[] | ${_GHD_TEMPLATE}" |
     sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
     tee "${CACHE_FILE}" |
-    fzf +m --ansi \
-        --with-nth=1 \
-        --delimiter='\t' \
-        --color='query:bold:italic:magenta,prompt:italic' \
-        --preview-window=top:65%:wrap \
-        --prompt=' Issue: ' --info='inline-right:  ' \
-        --preview='content=$(sed -n "$(( {n}+1 ))p" "'${CACHE_FILE}'" | cut -f2-); printf "%b\n" "${content}"' \
-        --preview-label=$'\033[1;35m[ Local ]\033[0m' \
-        --bind "result:transform-list-label:${BIND_RESULT_CMD}" \
-        --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
-        --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
-        --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
-        --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs gh issue view --web)" |
+    _fzfSelect ' Issue: ' "${CACHE_FILE}" 'gh issue view' |
     cut -f1
   )
 
-  unset ISSUE_CMD_REMOTE ISSUE_CMD_LOCAL
+  unset CMD_REMOTE CMD_LOCAL
   test -n "${RESULT}" && echo "${RESULT}" || return 1
 }
 
