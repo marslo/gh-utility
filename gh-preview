@@ -117,7 +117,7 @@ function _fzfSelect() {
       --no-separator \
       --color='query:bold:italic:magenta,prompt:italic' \
       --preview-window=top:wrap \
-      --prompt="${_prompt}" --info='inline-right:  ' \
+      --prompt="${_prompt}  " --info='inline-right:  ' \
       --preview='content=$(sed -n "$(( {n}+1 ))p" "'"${_cache}"'" | cut -f2-); printf "%b\n" "${content}"' \
       --preview-label=$'\033[1;35m[ Local ]\033[0m' \
       --bind "result:transform:${_GHD_RESIZE_CMD}" \
@@ -168,7 +168,7 @@ function getPRId() {
     jq ".[] | ${_GHD_TEMPLATE}" |
     sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
     tee "${CACHE_FILE}" |
-    _fzfSelect ' PR: ' "${CACHE_FILE}" 'gh pr view' |
+    _fzfSelect 'PR' "${CACHE_FILE}" 'gh pr view' |
     sed -En 's/^#([0-9]+).*/\1/p'
   )
 
@@ -215,7 +215,7 @@ function getIssueId() {
     jq ".[] | ${_GHD_TEMPLATE}" |
     sed -e 's/"\(.*\)"/\1/' -e 's/\\t/\t/' -e 's/\\"/"/g' -e 's/\\u001b/\\033/g' |
     tee "${CACHE_FILE}" |
-    _fzfSelect ' Issue: ' "${CACHE_FILE}" 'gh issue view' |
+    _fzfSelect 'Issue' "${CACHE_FILE}" 'gh issue view' |
     cut -f1
   )
 
