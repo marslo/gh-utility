@@ -1,3 +1,17 @@
+## [1.2.0](https://github.com/marslo/gh-utility/compare/v1.1.0...v1.2.0) (2026-05-21)
+
+### feat
+
+* feat(fzf-preview): use percentage-based dynamic preview window re-sizing; update pre-commit workflow to distinguish between push and pull_request events
+
+### chore
+
+* chore: update the prompt format
+
+### ci
+
+* ci: fix the 'Node.js 20 actions are deprecated' issue in pre-commit workflow
+
 ## [1.1.0](https://github.com/marslo/gh-utility/compare/v1.0.0...v1.1.0) (2026-05-19)
 
 ### CI/CD
