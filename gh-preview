@@ -4,7 +4,7 @@
 #     FileName : gh-preview
 #       Author : marslo
 #      Created : 2026-03-19 22:36:00
-#   LastChange : 2026-05-18 22:02:00
+#   LastChange : 2026-05-20 19:11:11
 #  Description : common lib - interactively select a GitHub PR/Issue via fzf
 #=============================================================================
 
@@ -25,11 +25,11 @@ fi
 # shared constants                                                            #
 # =========================================================================== #
 
-# fzf dynamic preview height: list max 5 / min 3 (fzf hardcoded minimum)
+# fzf dynamic preview height: 65% floor, expand when few matches
 declare _GHD_RESIZE_CMD=''
-_GHD_RESIZE_CMD+='list=$(( FZF_MATCH_COUNT > 5 ? 5 : FZF_MATCH_COUNT )); '
-_GHD_RESIZE_CMD+='(( list < 3 )) && list=3; '
-_GHD_RESIZE_CMD+='lines=$(( FZF_LINES - list - 3 )); '
+_GHD_RESIZE_CMD+='default_preview=$(( FZF_LINES * 65 / 100 )); '
+_GHD_RESIZE_CMD+='lines=$(( FZF_LINES - FZF_MATCH_COUNT - 3 )); '
+_GHD_RESIZE_CMD+='(( lines < default_preview )) && lines=${default_preview}; '
 _GHD_RESIZE_CMD+='(( lines < 3 )) && lines=3; '
 _GHD_RESIZE_CMD+='if [[ -z "${FZF_QUERY:-}" ]]; then label=" ${FZF_MATCH_COUNT} items "; else label=" ${FZF_MATCH_COUNT} matches for [${FZF_QUERY}] "; fi; '
 _GHD_RESIZE_CMD+='if [[ ${FZF_MATCH_COUNT} -eq 0 ]]; then '
@@ -55,53 +55,53 @@ declare -r _GHD_TEMPLATE
 # =========================================================================== #
 
 # _buildBinds <cache_file> <extract_id_cmd>
-#   sets exported: CMD_LOCAL
-#   sets local-ish: BIND_FOCUS_CMD, BIND_TOGGLE_CMD
+#   sets exported: _CMD_LOCAL
+#   sets local-ish: _BIND_FOCUS_CMD, _BIND_TOGGLE_CMD
 function _buildBinds() {
   local _cache="$1" _eid="$2"
 
-  CMD_LOCAL=''
-  CMD_LOCAL+='change-preview('
-  CMD_LOCAL+='content=$( sed -n "$(({n}+1))p" "'"${_cache}"'" | cut -f2- ); '
-  CMD_LOCAL+='printf "%b\n" "${content}"'
-  CMD_LOCAL+=')+'
-  CMD_LOCAL+='transform-preview-label('
-  CMD_LOCAL+='id=$( '"${_eid}"' ); '
-  CMD_LOCAL+='printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
-  CMD_LOCAL+=')'
-  export CMD_LOCAL
+  _CMD_LOCAL=''
+  _CMD_LOCAL+='change-preview('
+  _CMD_LOCAL+='  content=$( sed -n "$(({n}+1))p" "'"${_cache}"'" | cut -f2- ); '
+  _CMD_LOCAL+='  printf "%b\n" "${content}"'
+  _CMD_LOCAL+=')+'
+  _CMD_LOCAL+='transform-preview-label('
+  _CMD_LOCAL+='  id=$( '"${_eid}"' ); '
+  _CMD_LOCAL+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"'
+  _CMD_LOCAL+=')'
+  export _CMD_LOCAL
 
-  BIND_FOCUS_CMD=''
-  BIND_FOCUS_CMD+='id=$( '"${_eid}"' ); '
-  BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='else '
-  BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
-  BIND_FOCUS_CMD+='fi'
+  _BIND_FOCUS_CMD=''
+  _BIND_FOCUS_CMD+='id=$( '"${_eid}"' ); '
+  _BIND_FOCUS_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  _BIND_FOCUS_CMD+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"; '
+  _BIND_FOCUS_CMD+='else '
+  _BIND_FOCUS_CMD+='  printf "\033[1;35m[ LOCAL #%s ]\033[0m" "${id}"; '
+  _BIND_FOCUS_CMD+='fi'
 
-  BIND_TOGGLE_CMD=''
-  BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
-  BIND_TOGGLE_CMD+='  echo "${CMD_LOCAL}"; '
-  BIND_TOGGLE_CMD+='else '
-  BIND_TOGGLE_CMD+='  echo "${CMD_REMOTE}"; '
-  BIND_TOGGLE_CMD+='fi'
+  _BIND_TOGGLE_CMD=''
+  _BIND_TOGGLE_CMD+='if echo "${FZF_PREVIEW_LABEL}" | grep -q -i "remote"; then '
+  _BIND_TOGGLE_CMD+='  echo "${_CMD_LOCAL}"; '
+  _BIND_TOGGLE_CMD+='else '
+  _BIND_TOGGLE_CMD+='  echo "${_CMD_REMOTE}"; '
+  _BIND_TOGGLE_CMD+='fi'
 }
 
 # _buildRemoteCmd <extract_id_cmd> <preview_command>
-#   sets exported: CMD_REMOTE
+#   sets exported: _CMD_REMOTE
 function _buildRemoteCmd() {
   local _eid="$1" _pcmd="$2"
 
-  CMD_REMOTE=''
-  CMD_REMOTE+='change-preview('
-  CMD_REMOTE+='id=$( '"${_eid}"' ); '
-  CMD_REMOTE+='if [ -n "${id}" ]; then '"${_pcmd}"'; else echo "Loading Remote ..."; fi'
-  CMD_REMOTE+=')+'
-  CMD_REMOTE+='transform-preview-label('
-  CMD_REMOTE+='id=$( '"${_eid}"' ); '
-  CMD_REMOTE+='printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
-  CMD_REMOTE+=')'
-  export CMD_REMOTE
+  _CMD_REMOTE=''
+  _CMD_REMOTE+='change-preview('
+  _CMD_REMOTE+='  id=$( '"${_eid}"' ); '
+  _CMD_REMOTE+='  if [ -n "${id}" ]; then '"${_pcmd}"'; else echo "Loading Remote ..."; fi'
+  _CMD_REMOTE+=')+'
+  _CMD_REMOTE+='transform-preview-label('
+  _CMD_REMOTE+='  id=$( '"${_eid}"' ); '
+  _CMD_REMOTE+='  printf "\033[1;36m[ REMOTE #%s ]\033[0m" "${id}"'
+  _CMD_REMOTE+=')'
+  export _CMD_REMOTE
 }
 
 # _fzfSelect <prompt> <cache_file> <view_cmd>
@@ -110,21 +110,20 @@ function _buildRemoteCmd() {
 function _fzfSelect() {
   local _prompt="$1" _cache="$2" _vcmd="$3"
 
-  fzf +m --ansi \
+  fzf --no-multi --ansi \
       --with-nth=1 \
       --delimiter='\t' \
-      --height=65% \
-      --no-separator \
+      --height=70% \
       --color='query:bold:italic:magenta,prompt:italic' \
-      --preview-window=top:wrap \
+      --preview-window='top,65%,border-bottom,wrap' \
       --prompt="${_prompt}  " --info='inline-right:  ' \
       --preview='content=$(sed -n "$(( {n}+1 ))p" "'"${_cache}"'" | cut -f2-); printf "%b\n" "${content}"' \
       --preview-label=$'\033[1;35m[ Local ]\033[0m' \
       --bind "result:transform:${_GHD_RESIZE_CMD}" \
       --bind "resize:transform:${_GHD_RESIZE_CMD}" \
       --bind "load:transform:${_GHD_RESIZE_CMD}" \
-      --bind "focus:transform-preview-label:${BIND_FOCUS_CMD}" \
-      --bind "ctrl-\:transform:${BIND_TOGGLE_CMD}" \
+      --bind "focus:transform-preview-label:${_BIND_FOCUS_CMD}" \
+      --bind "ctrl-\:transform:${_BIND_TOGGLE_CMD}" \
       --bind "ctrl-y:execute-silent(echo {1} | sed -En 's/^#([0-9]+).*/\1/p' | pbcopy)" \
       --bind "ctrl-o:execute-silent(echo {1} | awk '{print \$1}' | xargs ${_vcmd} --web)"
 }
@@ -172,7 +171,7 @@ function getPRId() {
     sed -En 's/^#([0-9]+).*/\1/p'
   )
 
-  unset JQ_FILTER CMD_REMOTE CMD_LOCAL
+  unset JQ_FILTER _CMD_REMOTE _CMD_LOCAL
   test -n "${PR_ID}" && echo "${PR_ID}" || return 1
 }
 
@@ -219,7 +218,7 @@ function getIssueId() {
     cut -f1
   )
 
-  unset CMD_REMOTE CMD_LOCAL
+  unset _CMD_REMOTE _CMD_LOCAL
   test -n "${RESULT}" && echo "${RESULT}" || return 1
 }
 
